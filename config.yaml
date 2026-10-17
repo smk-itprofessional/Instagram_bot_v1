@@ -1,0 +1,68 @@
+# ── Change this to your niche ──
+niche: "motivational quotes with cinematic nature backgrounds"
+# Supported sizes: 1080x1350 (portrait, best reach) | 1080x1080 (square) | 1080x1920 (story/reel cover)
+width: 1080
+height: 1350
+
+# How captions look. {quote} and {date} are auto-filled.
+caption_template: |
+  {quote}
+
+  ✨ Daily inspiration — Day {day_of_year}
+
+  Follow for more daily motivation 🙌
+  .
+  .
+  .
+  {hashtags}
+
+hashtags:
+  - "#motivation"
+  - "#dailymotivation"
+  - "#mindset"
+  - "#inspiration"
+  - "#success"
+  - "#positivevibes"
+  - "#goals"
+  - "#discipline"
+  - "#selfgrowth"
+  - "#morningmotivation"
+
+# Prompt sent to the FREE image model (Pollinations / Flux). {theme} changes daily.
+image_prompt_template: "cinematic {niche}, ultra detailed, vibrant, high quality photography, no text watermark, no logo, theme: {theme}"
+
+# 30 rotating daily themes so you don't repeat. Edit freely.
+themes:
+  - "mountain sunrise with fog, hope"
+  - "ocean wave at dawn, calm power"
+  - "forest path with light rays, new beginning"
+  - "desert night sky with stars, dreams"
+  - "city skyline at golden hour, ambition"
+  - "lion close-up, courage"
+  - "eagle flying over peaks, vision"
+  - "waterfall in jungle, persistence"
+  - "lone tree on hill, resilience"
+  - "runner on road at sunrise, discipline"
+  - "hot air balloons, freedom"
+  - "lighthouse in storm, focus"
+  - "zen garden, peace"
+  - "snowy mountain summit, achievement"
+  - "sunflower field, positivity"
+  - "river through canyon, flow"
+  - "phoenix fire art, rebirth"
+  - "astronaut looking at earth, big goals"
+  - "chess board close-up, strategy"
+  - "gym dumbbells dark background, hard work"
+  - "library with warm light, knowledge"
+  - "balloon over mountains, journey"
+  - "tiger eyes, determination"
+  - "bridge over mist, trust the process"
+  - "campfire under stars, gratitude"
+  - "sailboat on open sea, adventure"
+  - "blooming flower macro, growth"
+  - "water droplet, clarity"
+  - "volcano sunset, power"
+  - "road into horizon, future"
+
+# Free text model settings (Pollinations.ai — no API key needed)
+text_model: "openai"   # free alias, auto-fallback to local quote if offline

@@ -1,0 +1,6 @@
+# Instagram Auto-Poster — 1 post/day, 100% free
+# Python 3.11+, no paid services
+
+requests>=2.31
+Pillow>=10.0
+pyyaml>=6.0
