@@ -1,0 +1,27 @@
+name: daily-ig-post
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Generate + Post
+        env:
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          DRY_RUN: "false"
+        run: python auto_post.py
+      - name: Keep output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-${{ github.run_number }}
+          path: output/
