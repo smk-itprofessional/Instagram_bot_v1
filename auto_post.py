@@ -1,8 +1,8 @@
 """
-Instagram Auto-Poster — daily 1 post, 100% free stack.
+Instagram Auto-Poster — daily 1 post, 100% free stack (develop: 365-day unique).
 
 Flow:
-  1. Pick today's theme (date-seeded rotation, no repeat for 30 days)
+  1. Pick today's theme (deterministic 365-day plan, no repeat within a year)
   2. Generate image with FREE model: Pollinations.ai / Flux (no API key)
   3. Generate quote/caption with FREE model: Pollinations text (no API key)
   4. If IG creds present -> upload image to public URL + publish via Graph API
@@ -35,6 +35,57 @@ FALLBACK_QUOTES = [
     "Hard times build strong minds.",
 ]
 
+# ---- 365-day unique engine (deterministic, no repeats within a year) ----
+_BG = [
+    "misty mountains", "golden desert", "emerald forest", "arctic aurora",
+    "tropical coast", "monsoon valley", "alpine peak", "red canyon",
+    "lavender field", "starry night desert", "autumn highlands", "turquoise lagoon",
+]
+_LIGHT = ["sunrise glow", "golden hour", "blue hour", "starlight", "soft morning mist"]
+_MOOD = [
+    "journey", "courage", "new beginning", "perseverance", "gratitude",
+    "focus", "hope", "discipline", "freedom", "resilience",
+]
+
+
+def _combo_pool(subjects, year):
+    """Cartesian pool shuffled deterministically by year. len >> 365."""
+    from itertools import product
+    pool = list(product(subjects, _BG, _LIGHT, _MOOD))
+    rng = random.Random(f"ig-365-{year}")
+    rng.shuffle(pool)
+    return pool
+
+
+def unique_fallback_quote(subject, background, lighting, mood, doy, year):
+    """Deterministic fallback — always unique because it embeds day + combo."""
+    import hashlib
+    h = int(hashlib.sha256(f"{year}-{doy}".encode()).hexdigest(), 16)
+    worries = [("worries", "wings"), ("fear", "fuel"), ("doubt", "direction"),
+               ("noise", "clarity"), ("waiting", "wings"), ("limits", "lessons"),
+               ("storms", "stories"), ("weight", "wonder")]
+    w1, w2 = worries[(h // 7) % len(worries)]
+    lessons = [
+        "small steps lift you to endless horizons",
+        "steady hearts outlast strong winds",
+        "every mile begins with one brave rise",
+        "quiet effort moves the highest peaks",
+        "today's climb shapes tomorrow's view",
+        "rise slow, shine far",
+    ]
+    lesson = lessons[(h // 13) % len(lessons)]
+    # Every template embeds subject+background+lighting+mood so that
+    # unique theme => unique quote. Day is in template 3; others carry
+    # lighting+mood which together with subject+background is unique.
+    tpls = [
+        f"A {subject} over {background} at {lighting} reminds you: {lesson} [{mood}].",
+        f"{lesson.capitalize()}, like a {subject} over {background} [{lighting} • {mood}].",
+        f"Day {doy} of 365 — let a {subject} turn {w1} into {w2} above the {background} [{lighting} • {mood}].",
+        f"Beyond the {background} at {lighting}, a {subject} carries {mood} forward.",
+        f"Keep going: even a {subject} above {background} at {lighting} starts with first light [{mood}].",
+    ]
+    return tpls[h % len(tpls)]
+
 def load_config():
     with open(ROOT / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -43,18 +94,42 @@ def today_seed():
     d = datetime.date.today()
     return d.timetuple().tm_yday, d.isoformat()
 
-def pick_theme(cfg):
-    day_of_year, datestr = today_seed()
-    themes = cfg.get("themes", ["inspiration"])
-    theme = themes[(day_of_year - 1) % len(themes)]
-    seed = int(datetime.date.today().strftime("%Y%m%d"))
-    return theme, seed, day_of_year, datestr
+def pick_theme(cfg, for_date=None):
+    """Deterministic 365-day unique theme.
+    Returns (theme, seed, day_of_year, datestr, ctx) where ctx has
+    subject/background/lighting/mood/year for image+quote builders.
+    Same date -> same result; different dates in same year -> different."""
+    d = for_date or datetime.date.today()
+    day_of_year = d.timetuple().tm_yday
+    datestr = d.isoformat()
+    subjects = cfg.get("themes", ["inspiration"]) or ["inspiration"]
+    pool = _combo_pool(subjects, d.year)
+    subject, background, lighting, mood = pool[(day_of_year - 1) % len(pool)]
+    theme = f"{subject}, {background}, {lighting}, {mood}"
+    seed = int(d.strftime("%Y%m%d"))
+    ctx = {"subject": subject, "background": background, "lighting": lighting,
+           "mood": mood, "year": d.year, "doy": day_of_year, "date": datestr}
+    return theme, seed, day_of_year, datestr, ctx
 
-def gen_image(cfg, theme, seed):
+def gen_image(cfg, theme, seed, ctx=None):
     w, h = cfg.get("width", 1080), cfg.get("height", 1350)
     tpl = cfg.get("image_prompt_template", "{theme}")
     niche = cfg.get("niche", "")
-    prompt = tpl.format(theme=theme, niche=niche)
+    ctx = ctx or {}
+    doy = ctx.get("doy", "?")
+    year = ctx.get("year", "")
+    mood = ctx.get("mood", "")
+    # Build base prompt tolerantly (template may only have {theme}/{niche})
+    try:
+        prompt = tpl.format(theme=theme, niche=niche, day_of_year=doy,
+                            date=ctx.get("date", ""), background=ctx.get("background", ""),
+                            lighting=ctx.get("lighting", ""), mood=mood, year=year)
+    except KeyError:
+        prompt = tpl.replace("{theme}", theme).replace("{niche}", niche)
+    # Force uniqueness even if template ignores extra fields
+    uniq = f", unique scene day {doy}/365 {year} {mood}".strip()
+    if uniq not in prompt:
+        prompt = f"{prompt}{uniq}"
     q = urllib.parse.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{q}?width={w}&height={h}&seed={seed}&model=flux&nologo=true"
     print(f"[image] FREE model request: {prompt[:90]}...")
@@ -81,8 +156,11 @@ def gen_image(cfg, theme, seed):
     print(f"[image] saved {p} ({p.stat().st_size//1024} KB)")
     return p, prompt
 
-def gen_quote(cfg, theme):
-    """Free text model. Falls back to local list if offline/rate-limited."""
+def gen_quote(cfg, theme, ctx=None):
+    """Free text model with deterministic unique fallback + dedup guard."""
+    ctx = ctx or {}
+    doy = ctx.get("doy")
+    year = ctx.get("year")
     prompt = f"Write ONE short original motivational quote (max 20 words) about: {theme}. No hashtags, no quotes around it, just the quote."
     try:
         url = "https://text.pollinations.ai/" + urllib.parse.quote(prompt) + "?model=openai"
@@ -91,20 +169,51 @@ def gen_quote(cfg, theme):
         q = r.text.strip().strip('"').strip()
         # guard against long/error responses
         if 5 < len(q) < 300 and "pollinations" not in q.lower():
+            # Dedup guard: if this exact quote was already posted this year, vary it
+            if doy and year and _quote_already_used(q, year):
+                q = f"{q} [Day {doy}/365]"
             print(f"[text] FREE model quote: {q}")
             return q
         raise ValueError("bad response, using fallback")
     except Exception as e:
-        print(f"[text] model unavailable ({e}), using fallback quote.")
+        print(f"[text] model unavailable ({e}), using unique fallback quote.")
+        if doy and year:
+            return unique_fallback_quote(ctx.get("subject", theme),
+                                          ctx.get("background", ""),
+                                          ctx.get("lighting", ""),
+                                          ctx.get("mood", ""), doy, year)
         random.seed(datetime.date.today().strftime("%Y%m%d"))
         return random.choice(FALLBACK_QUOTES)
 
-def build_caption(cfg, quote, day_of_year):
+
+def _quote_already_used(quote, year):
+    """Check output/posted.log for duplicate quote this year."""
+    try:
+        p = OUT / "posted.log"
+        if not p.exists():
+            return False
+        prefix = str(year)
+        for line in p.read_text(encoding="utf-8").splitlines()[-400:]:
+            try:
+                j = json.loads(line)
+            except Exception:
+                continue
+            if str(j.get("date", "")).startswith(prefix) and j.get("quote") == quote:
+                return True
+    except Exception:
+        pass
+    return False
+
+def build_caption(cfg, quote, day_of_year, ctx=None):
     tags = " ".join(cfg.get("hashtags", []))
+    # Always append unique day tag so captions can never repeat within a year
+    day_tag = f"#day{day_of_year}"
+    if day_tag not in tags:
+        tags = (tags + f" {day_tag}").strip()
     tpl = cfg.get("caption_template", "{quote}\n{hashtags}")
     return tpl.format(quote=quote, hashtags=tags,
                       day_of_year=day_of_year,
-                      date=datetime.date.today().isoformat())
+                      date=(ctx or {}).get("date", datetime.date.today().isoformat()))
 
 def upload_public(image_path: pathlib.Path) -> str:
     """Instagram API needs a PUBLIC image URL.
@@ -251,19 +360,69 @@ def write_preview(caption, image_path):
 </body></html>"""
     (OUT / "preview.html").write_text(html, encoding="utf-8")
 
-def main():
-    cfg = load_config()
-    theme, seed, day_of_year, datestr = pick_theme(cfg)
-    print(f"=== IG auto-post {datestr} | theme: {theme} ===")
+def validate_token(token):
+    """Fail fast with a clear message if the IG token is expired/invalid."""
+    r = requests.get(f"{BASE}/me", params={"fields": "id", "access_token": token},
+                       timeout=20).json()
+    if "error" in r:
+        err = r["error"]
+        raise RuntimeError(
+            f"IG token invalid/expired: {err.get('message')} "
+            f"[code {err.get('code')}/{err.get('error_subcode')}] - "
+            "Generate a new long-lived token and update IG_ACCESS_TOKEN secret."
+        )
+    return True
 
-    image_path, used_prompt = gen_image(cfg, theme, seed)
-    quote = gen_quote(cfg, theme)
-    caption = build_caption(cfg, quote, day_of_year)
-    write_preview(caption, image_path)
+
+def verify_365(cfg, year):
+    """Offline check: 365 days must give 365 unique themes/quotes/captions/prompts."""
+    seen_t, seen_q, seen_c, seen_p = set(), set(), set(), set()
+    n = 366 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 365
+    d = datetime.date(year, 1, 1)
+    for _ in range(n):
+        theme, seed, doy, ds, ctx = pick_theme(cfg, for_date=d)
+        tpl = cfg.get("image_prompt_template", "{theme}")
+        try:
+            base = tpl.format(theme=theme, niche=cfg.get("niche", ""),
+                              day_of_year=doy, date=ds, background=ctx["background"],
+                              lighting=ctx["lighting"], mood=ctx["mood"], year=year)
+        except KeyError:
+            base = tpl.replace("{theme}", theme)
+        img_prompt = f"{base}, unique scene day {doy}/365 {year} {ctx['mood']}"
+        q = unique_fallback_quote(ctx["subject"], ctx["background"],
+                                  ctx["lighting"], ctx["mood"], doy, year)
+        tags = " ".join(cfg.get("hashtags", [])) + f" #day{doy}"
+        cap = cfg.get("caption_template", "{quote}\n{hashtags}").format(
+            quote=q, hashtags=tags, day_of_year=doy, date=ds)
+        seen_t.add(theme); seen_q.add(q); seen_c.add(cap); seen_p.add(img_prompt)
+        d += datetime.timedelta(days=1)
+    return {"days": n, "unique_themes": len(seen_t), "unique_quotes": len(seen_q),
+            "unique_captions": len(seen_c), "unique_image_prompts": len(seen_p),
+            "all_unique": len(seen_t) == len(seen_q) == len(seen_c) == len(seen_p) == n}
+
+
+def main():
+    if "--verify-365" in sys.argv:
+        cfg = load_config()
+        year = int(sys.argv[sys.argv.index("--verify-365") + 1]) if len(sys.argv) > 2 else datetime.date.today().year
+        res = verify_365(cfg, year)
+        print(res)
+        return 0 if res["all_unique"] else 1
+    cfg = load_config()
+    theme, seed, day_of_year, datestr, ctx = pick_theme(cfg)
+    print(f"=== IG auto-post {datestr} | theme: {theme} ===")
+    print(f"[365] Day {day_of_year} ctx={ctx}")
 
     ig_id = os.getenv("IG_USER_ID", "").strip()
     token = os.getenv("IG_ACCESS_TOKEN", "").strip()
     dry = os.getenv("DRY_RUN", "").lower() in ("1", "true", "yes") or not (ig_id and token)
+    if not dry:
+        validate_token(token)  # fail fast before image generation/upload
+
+    image_path, used_prompt = gen_image(cfg, theme, seed, ctx)
+    quote = gen_quote(cfg, theme, ctx)
+    caption = build_caption(cfg, quote, day_of_year, ctx)
+    write_preview(caption, image_path)
 
     if dry:
         print("\n--- DRY-RUN (no IG creds) ---")
